@@ -1,0 +1,2 @@
+* do we need 'packages-link' to link? I think links should maybe be done as part of involve and mantained via 'packages link (--list|--check|--rebuild)'
+* updates has been partially reworked and contains TODO notes

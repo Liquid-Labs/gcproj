@@ -27,11 +27,14 @@ work-involve() {
   if [[ ! -L "${CATALYST_WORK_DB}/curr_work" ]]; then
     echoerrandexit "There is no active unit of work to involve. Try:\ncatalyst work resume"
   fi
-
-  local PROJECT_NAME
+  TODO: warn user that currently they must involve packages in dependency order.
+  TODO: implement 'packages link --rebuild' and advise user to manually update dependency order and then rebuild links as a workaround until we automate dependency ordering
+  # TODO: create issue to automate the dependency graph in future
+  local PROJECT_NAME # the project being involved in the current unit of work
+  # set implicitly by current workin directory, or by name
   if (( $# == 0 )) && [[ -n "$BASE_DIR" ]]; then
     PROJECT_NAME=`basename $BASE_DIR`
-  else
+  else # setting by name, which we will check as valid
     exactUserArgs PROJECT_NAME -- "$@"
     test -d "${CATALYST_PLAYGROUND}/${PROJECT_NAME}" \
       || echoerrandexit "Invalid project name '$PROJECT_NAME'. Perhaps it needs to be imported? Try:\ncatalyst workspace import <git URL>"
@@ -41,6 +44,7 @@ work-involve() {
   local BRANCH_NAME=$(basename $(readlink "${CATALYST_WORK_DB}/curr_work"))
   requirePackage # used later if auto-linking
 
+  # create a branch in the newly involved project to match the common work branch
   cd "${CATALYST_PLAYGROUND}/${PROJECT_NAME}"
   if git branch | grep -qE "^\*? *${BRANCH_NAME}\$"; then
     echowarn "Found existing work branch '${BRANCH_NAME}' in project ${PROJECT_NAME}. We will use it. Please fix manually if this is unexpected."
@@ -50,21 +54,32 @@ work-involve() {
     echo "Created work branch '${BRANCH_NAME}' for project '${PROJECT_NAME}'."
   fi
 
+  # update involved projects
   list-add-item INVOLVED_PROJECTS "${PROJECT_NAME}"
   updateWorkDb
 
-  local PRIMARY_PROJECT=$INVOLVED_PROJECTS
-  if [[ "$PRIMARY_PROJECT" != "$PROJECT_NAME" ]]; then
-    local NEW_PACKAGE_FILE
-    while read NEW_PACKAGE_FILE; do
-      local NEW_PACKAGE_NAME=$(cat "$NEW_PACKAGE_FILE" | jq --raw-output '.name | @sh' | tr -d "'")
-      if echo "$PACKAGE" | jq -e ".dependencies and ((.dependencies | keys | any(. == \"${NEW_PACKAGE_NAME}\"))) or (.devDependencies and (.devDependencies | keys | any(. == \"${NEW_PACKAGE_NAME}\")))" > /dev/null; then
-        :
-        # Currently disabled
-        # packages-link "${PROJECT_NAME}:${NEW_PACKAGE_NAME}"
+  # Now, we will attempt to link the newly involved package to any previously involved packages (if any)
+  for PRIOR_PROJECT in $INVOLVED_PROJECTS; do
+    if [[ $PRIOR_PROJECT != $PROJECT_NAME ]]; then # if not self
+      # handle necessary go links, if any
+      if [[ -d "${CATALYST_PLAYGROUND}/${PRIOR_PROJECT}/go" ]] \
+          && [[ -d "${CATALYST_PLAYGROUND}/${PROJECT_NAME}/go" ]]; then
+        # We just do the go link without detecting dependencies for two reasons.
+        # 1) Dependencies may be indirect and there might be (probably is?) a way to check, but it's why bother, because,
+        # 2) Linking (i.e., using the 'replace' directive) has no negative effect if unneeded.
+        workLinkGo "${PROJECT_NAME}" "${PRIOR_PROJECT}" # link new project to prior project
       fi
-    done < <(find "${CATALYST_PLAYGROUND}/${PROJECT_NAME}" -name "package.json" -not -path "*node_modules/*")
-  fi
+      # handle necessary npm links, if any
+      local NEW_PACKAGE_NAME=$(cat "$NEW_PACKAGE_FILE" | jq --raw-output '.name | @sh' | tr -d "'")
+      # the prior project has a dependency on the new project, link the new project to the prior project
+      TODO: update this logic to match that statement
+      if echo "$PACKAGE" | jq -e ".dependencies and ((.dependencies | keys | any(. == \"${NEW_PACKAGE_NAME}\"))) or (.devDependencies and (.devDependencies | keys | any(. == \"${NEW_PACKAGE_NAME}\")))" > /dev/null; then
+        workLinkNpm "${PROJECT_NAME}" "${PRIOR_PROJECT}" # link new project to prior project
+      fi
+    fi
+  done
+
+
 }
 
 work-merge() {

@@ -24,6 +24,9 @@ packages-deploy() {
 
 packages-link() {
   echoerrandexit "Linking currently disabled."
+  local LINK_DEST LINK_SRC
+  SPEC="${1}"
+  for i
 }
 
 packages-lint() {
