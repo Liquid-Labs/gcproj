@@ -24,7 +24,7 @@ work-ignore-rest() {
 }
 
 work-involve() {
-  if [[ ! -L "${CATALYST_WORK_DB}/curr_work" ]]; then
+  if [[ ! -L "${LIQ_WORK_DB}/curr_work" ]]; then
     echoerrandexit "There is no active unit of work to involve. Try:\ncatalyst work resume"
   fi
   TODO: warn user that currently they must involve packages in dependency order.
@@ -33,19 +33,18 @@ work-involve() {
   local PROJECT_NAME # the project being involved in the current unit of work
   # set implicitly by current workin directory, or by name
   if (( $# == 0 )) && [[ -n "$BASE_DIR" ]]; then
-    PROJECT_NAME=`basename $BASE_DIR`
-  else # setting by name, which we will check as valid
+    PROJECT_NAME=$(cat "$NEW_PACKAGE_FILE" | jq --raw-output '.name | @sh' | tr -d "'")
+  else
     exactUserArgs PROJECT_NAME -- "$@"
-    test -d "${CATALYST_PLAYGROUND}/${PROJECT_NAME}" \
-      || echoerrandexit "Invalid project name '$PROJECT_NAME'. Perhaps it needs to be imported? Try:\ncatalyst workspace import <git URL>"
+    test -d "${LIQ_PLAYGROUND}/${PROJECT_NAME}" \
+      || echoerrandexit "Invalid project name '$PROJECT_NAME'. Perhaps it needs to be imported? Try:\ncatalyst playground import <git URL>"
   fi
 
-  source "${CATALYST_WORK_DB}/curr_work"
-  local BRANCH_NAME=$(basename $(readlink "${CATALYST_WORK_DB}/curr_work"))
+  source "${LIQ_WORK_DB}/curr_work"
+  local BRANCH_NAME=$(basename $(readlink "${LIQ_WORK_DB}/curr_work"))
   requirePackage # used later if auto-linking
 
-  # create a branch in the newly involved project to match the common work branch
-  cd "${CATALYST_PLAYGROUND}/${PROJECT_NAME}"
+  cd "${LIQ_PLAYGROUND}/${PROJECT_NAME}"
   if git branch | grep -qE "^\*? *${BRANCH_NAME}\$"; then
     echowarn "Found existing work branch '${BRANCH_NAME}' in project ${PROJECT_NAME}. We will use it. Please fix manually if this is unexpected."
     git checkout -q "${BRANCH_NAME}" || echoerrandexit "There was a problem checking out the work branch. ($?)"
@@ -58,37 +57,26 @@ work-involve() {
   list-add-item INVOLVED_PROJECTS "${PROJECT_NAME}"
   updateWorkDb
 
-  # Now, we will attempt to link the newly involved package to any previously involved packages (if any)
-  for PRIOR_PROJECT in $INVOLVED_PROJECTS; do
-    if [[ $PRIOR_PROJECT != $PROJECT_NAME ]]; then # if not self
-      # handle necessary go links, if any
-      if [[ -d "${CATALYST_PLAYGROUND}/${PRIOR_PROJECT}/go" ]] \
-          && [[ -d "${CATALYST_PLAYGROUND}/${PROJECT_NAME}/go" ]]; then
-        # We just do the go link without detecting dependencies for two reasons.
-        # 1) Dependencies may be indirect and there might be (probably is?) a way to check, but it's why bother, because,
-        # 2) Linking (i.e., using the 'replace' directive) has no negative effect if unneeded.
-        workLinkGo "${PROJECT_NAME}" "${PRIOR_PROJECT}" # link new project to prior project
-      fi
-      # handle necessary npm links, if any
-      local NEW_PACKAGE_NAME=$(cat "$NEW_PACKAGE_FILE" | jq --raw-output '.name | @sh' | tr -d "'")
-      # the prior project has a dependency on the new project, link the new project to the prior project
-      TODO: update this logic to match that statement
+  local PRIMARY_PROJECT=$INVOLVED_PROJECTS
+  if [[ "$PRIMARY_PROJECT" != "$PROJECT_NAME" ]]; then
+    local NEW_PACKAGE_FILE
+    while read NEW_PACKAGE_FILE; do
+      local NEW_PACKAGE_NAME
+      NEW_PACKAGE_NAME=$(cat "$NEW_PACKAGE_FILE" | jq --raw-output '.name | @sh' | tr -d "'")
       if echo "$PACKAGE" | jq -e ".dependencies and ((.dependencies | keys | any(. == \"${NEW_PACKAGE_NAME}\"))) or (.devDependencies and (.devDependencies | keys | any(. == \"${NEW_PACKAGE_NAME}\")))" > /dev/null; then
         workLinkNpm "${PROJECT_NAME}" "${PRIOR_PROJECT}" # link new project to prior project
       fi
-    fi
-  done
-
-
+    done < <(find "${LIQ_PLAYGROUND}/${PROJECT_NAME}" -name "package.json" -not -path "*node_modules/*")
+  fi
 }
 
 work-merge() {
-  if [[ ! -f "${CATALYST_WORK_DB}/curr_work" ]]; then
+  if [[ ! -f "${LIQ_WORK_DB}/curr_work" ]]; then
     echoerrandexit "You can only merge work in the current unit of work. Try:\ncatalyst work select"
   fi
 
-  source "${CATALYST_WORK_DB}/curr_work"
-  local CURR_WORK=$(basename $(readlink "${CATALYST_WORK_DB}/curr_work" ))
+  source "${LIQ_WORK_DB}/curr_work"
+  local CURR_WORK=$(basename $(readlink "${LIQ_WORK_DB}/curr_work" ))
 
   if [[ -z "$INVOLVED_PROJECTS" ]]; then
     echoerrandexit "No projects involved in the current unit of work '$CURR_WORK'."
@@ -124,7 +112,7 @@ work-merge() {
 
   for TM in $TO_MERGE; do
     convert-dot
-    cd "${CATALYST_PLAYGROUND}/${TM}"
+    cd "${LIQ_PLAYGROUND}/${TM}"
     local SHORT_STAT=`git diff --shortstat master ${WORKBRANCH}`
     local INS_COUNT=`echo "${SHORT_STAT}" | egrep -Eio -e '\d+ insertion' | awk '{print $1}' || true`
     INS_COUNT=${INS_COUNT:-0}
@@ -156,8 +144,8 @@ work-merge() {
     echoerrandexit "It may be that not all involved projects were committed. Leaving possibly uncomitted projects as part of the current unit of work."
   fi
   if [[ -z "${INVOLVED_PROJECTS}" ]]; then
-    rm "${CATALYST_WORK_DB}/curr_work"
-    rm "${CATALYST_WORK_DB}/${CURR_WORK}"
+    rm "${LIQ_WORK_DB}/curr_work"
+    rm "${LIQ_WORK_DB}/${CURR_WORK}"
   fi
 }
 
@@ -210,7 +198,7 @@ work-report() {
 }
 
 work-resume() {
-  if [[ -L "${CATALYST_WORK_DB}/curr_work" ]]; then
+  if [[ -L "${LIQ_WORK_DB}/curr_work" ]]; then
     requireCleanRepos
   fi
 
@@ -220,17 +208,17 @@ work-resume() {
   requireCleanRepos "${WORK_NAME}"
 
   local CURR_WORK
-  if [[ -L "${CATALYST_WORK_DB}/curr_work" ]]; then
-    CURR_WORK=$(basename $(readlink "${CATALYST_WORK_DB}/curr_work"))
+  if [[ -L "${LIQ_WORK_DB}/curr_work" ]]; then
+    CURR_WORK=$(basename $(readlink "${LIQ_WORK_DB}/curr_work"))
     if [[ "${CURR_WORK}" == "${WORK_NAME}" ]]; then
       echowarn "'$CURR_WORK' is already the current unit of work."
       exit 0
     fi
     workSwitchBranches master
-    rm "${CATALYST_WORK_DB}/curr_work"
+    rm "${LIQ_WORK_DB}/curr_work"
   fi
-  cd "${CATALYST_WORK_DB}" && ln -s "${WORK_NAME}" curr_work
-  source "${CATALYST_WORK_DB}"/curr_work
+  cd "${LIQ_WORK_DB}" && ln -s "${WORK_NAME}" curr_work
+  source "${LIQ_WORK_DB}"/curr_work
   workSwitchBranches "$WORK_NAME"
 
   if [[ -n "$CURR_WORK" ]]; then
@@ -251,7 +239,7 @@ work-show() {
 
   echo "Branch name: $WORK_NAME"
   echo
-  source "${CATALYST_WORK_DB}/${WORK_NAME}"
+  source "${LIQ_WORK_DB}/${WORK_NAME}"
   if [[ -z "$INVOLVED_PROJECTS" ]]; then
     "Involved projects: <none>"
   else
@@ -272,18 +260,18 @@ work-start() {
     || echoerrandexit "Work description must begin with a lowercase letter or number and contain only lowercase letters and numbers separated by a single dash (/$WORK_DESC_SPEC/)."
   local BRANCH_NAME=`branchName "${WORK_DESC}"`
 
-  if [[ -f "${CATALYST_WORK_DB}/${BRANCH_NAME}" ]]; then
+  if [[ -f "${LIQ_WORK_DB}/${BRANCH_NAME}" ]]; then
     echoerrandexit "Unit of work '${BRANCH_NAME}' aready exists. Bailing out."
   fi
 
   # TODO: check that current work branch is clean before switching away from it
   # https://github.com/Liquid-Labs/catalyst-cli/issues/14
 
-  if [[ -L "${CATALYST_WORK_DB}/curr_work" ]]; then
-    rm "${CATALYST_WORK_DB}/curr_work"
+  if [[ -L "${LIQ_WORK_DB}/curr_work" ]]; then
+    rm "${LIQ_WORK_DB}/curr_work"
   fi
-  touch "${CATALYST_WORK_DB}/${BRANCH_NAME}"
-  cd ${CATALYST_WORK_DB} && ln -s "${BRANCH_NAME}" curr_work
+  touch "${LIQ_WORK_DB}/${BRANCH_NAME}"
+  cd ${LIQ_WORK_DB} && ln -s "${BRANCH_NAME}" curr_work
   updateWorkDb
 
   if [[ -n "$BASE_DIR" ]]; then
@@ -299,16 +287,16 @@ work-stop() {
     || ( contextHelp; echoerrandexit "Bad options." )
   eval "$TMP"
 
-  if [[ -L "${CATALYST_WORK_DB}/curr_work" ]]; then
-    local CURR_WORK=$(basename $(readlink "${CATALYST_WORK_DB}/curr_work"))
+  if [[ -L "${LIQ_WORK_DB}/curr_work" ]]; then
+    local CURR_WORK=$(basename $(readlink "${LIQ_WORK_DB}/curr_work"))
     if [[ -z "$KEEP_CHECKOUT" ]]; then
       requireCleanRepos
       workSwitchBranches master
     else
-      source "${CATALYST_WORK_DB}/curr_work"
+      source "${LIQ_WORK_DB}/curr_work"
       echo "Current branch "$CURR_WORK" maintained for ${INVOLVED_PROJECTS}."
     fi
-    rm "${CATALYST_WORK_DB}/curr_work"
+    rm "${LIQ_WORK_DB}/curr_work"
     echo "Paused work on '$CURR_WORK'. No current unit of work."
   else
     echoerrandexit "No current unit of work to stop."
